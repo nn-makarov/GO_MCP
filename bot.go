@@ -12,9 +12,9 @@ import (
 )
 
 var (
-    botToken     string
-    mcpURL       string
-    deepseekKey  string
+    botToken    string
+    mcpURL      string
+    deepseekKey string
 )
 
 func main() {
@@ -32,6 +32,18 @@ func main() {
     if deepseekKey == "" {
         log.Fatal("DEEPSEEK_API_KEY not set")
     }
+
+    // Запускаем health check сервер для Render
+    go func() {
+        http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+            w.WriteHeader(http.StatusOK)
+            w.Write([]byte("OK"))
+        })
+        log.Println("Health check server listening on :10000")
+        if err := http.ListenAndServe(":10000", nil); err != nil {
+            log.Println("Health check server error:", err)
+        }
+    }()
 
     log.Println("AI Bot started in polling mode")
     offset := 0
@@ -81,7 +93,6 @@ func handleUpdate(update Update) {
     chatID := update.Message.Chat.ID
     userText := update.Message.Text
 
-    // Отправляем запрос в DeepSeek
     response, err := callDeepSeek(userText)
     if err != nil {
         log.Println("DeepSeek error:", err)
@@ -95,7 +106,17 @@ func handleUpdate(update Update) {
 func callDeepSeek(userMessage string) (string, error) {
     url := "https://api.deepseek.com/v1/chat/completions"
 
-    // Описание инструментов, которые есть в MCP
+    messages := []map[string]interface{}{
+        {
+            "role":    "system",
+            "content": "You are a friendly assistant. You can call tools: get_joke, greet. If user asks for a joke, call get_joke. If user asks to greet someone, call greet with name. Otherwise respond naturally.",
+        },
+        {
+            "role":    "user",
+            "content": userMessage,
+        },
+    }
+
     tools := []map[string]interface{}{
         {
             "type": "function",
@@ -124,17 +145,6 @@ func callDeepSeek(userMessage string) (string, error) {
         },
     }
 
-    messages := []map[string]interface{}{
-        {
-            "role":    "system",
-            "content": "You are a friendly assistant. You can call tools: get_joke, greet. If user asks for a joke, call get_joke. If user asks to greet someone, call greet with name. Otherwise respond naturally.",
-        },
-        {
-            "role":    "user",
-            "content": userMessage,
-        },
-    }
-
     body := map[string]interface{}{
         "model":       "deepseek-chat",
         "messages":    messages,
@@ -159,7 +169,6 @@ func callDeepSeek(userMessage string) (string, error) {
         return "", err
     }
 
-    // Извлекаем ответ
     choices, ok := result["choices"].([]interface{})
     if !ok || len(choices) == 0 {
         return "Не удалось получить ответ", nil
@@ -174,24 +183,23 @@ func callDeepSeek(userMessage string) (string, error) {
         function := toolCall["function"].(map[string]interface{})
         toolName := function["name"].(string)
 
-        // Парсим аргументы
         var args map[string]interface{}
         if argsRaw, ok := function["arguments"].(string); ok {
             json.Unmarshal([]byte(argsRaw), &args)
         }
 
-        // Вызываем MCP
         mcpResult, err := callMCP(toolName, args)
         if err != nil {
             return "", err
         }
 
-        // Отправляем результат обратно в DeepSeek для финального ответа
         return finalizeWithToolResult(userMessage, toolName, mcpResult)
     }
 
-    // Если нет вызова инструмента, просто возвращаем ответ
-    return message["content"].(string), nil
+    if content, ok := message["content"].(string); ok {
+        return content, nil
+    }
+    return "Не удалось получить ответ", nil
 }
 
 func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, error) {
@@ -207,8 +215,8 @@ func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, e
             "content": userMessage,
         },
         {
-            "role":    "tool",
-            "content": toolResult,
+            "role":      "tool",
+            "content":   toolResult,
             "tool_call_id": "call_1",
         },
     }
@@ -239,7 +247,11 @@ func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, e
     }
     choice := choices[0].(map[string]interface{})
     message := choice["message"].(map[string]interface{})
-    return message["content"].(string), nil
+    content, _ := message["content"].(string)
+    if content == "" {
+        return toolResult, nil
+    }
+    return content, nil
 }
 
 func callMCP(tool string, args map[string]interface{}) (string, error) {
