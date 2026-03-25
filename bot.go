@@ -14,7 +14,7 @@ import (
 var (
     botToken    string
     mcpURL      string
-    deepseekKey string
+    groqAPIKey  string
 )
 
 func main() {
@@ -28,12 +28,12 @@ func main() {
         mcpURL = "https://go-mcp.onrender.com/call"
     }
 
-    deepseekKey = os.Getenv("DEEPSEEK_API_KEY")
-    if deepseekKey == "" {
-        log.Fatal("DEEPSEEK_API_KEY not set")
+    groqAPIKey = os.Getenv("GROQ_API_KEY")
+    if groqAPIKey == "" {
+        log.Fatal("GROQ_API_KEY not set")
     }
 
-    // Запускаем health check сервер для Render
+    // Health check server for Render
     go func() {
         http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
             w.WriteHeader(http.StatusOK)
@@ -97,9 +97,9 @@ func handleUpdate(update Update) {
     chatID := update.Message.Chat.ID
     userText := update.Message.Text
 
-    response, err := callDeepSeek(userText)
+    response, err := callGroq(userText)
     if err != nil {
-        log.Println("DeepSeek error:", err)
+        log.Println("Groq error:", err)
         sendMessage(chatID, "Извините, произошла ошибка. Попробуйте позже.")
         return
     }
@@ -107,8 +107,8 @@ func handleUpdate(update Update) {
     sendMessage(chatID, response)
 }
 
-func callDeepSeek(userMessage string) (string, error) {
-    url := "https://api.deepseek.com/v1/chat/completions"
+func callGroq(userMessage string) (string, error) {
+    url := "https://api.groq.com/openai/v1/chat/completions"
 
     messages := []map[string]interface{}{
         {
@@ -150,7 +150,7 @@ func callDeepSeek(userMessage string) (string, error) {
     }
 
     body := map[string]interface{}{
-        "model":       "deepseek-chat",
+        "model":       "llama3-70b-8192",
         "messages":    messages,
         "tools":       tools,
         "tool_choice": "auto",
@@ -158,7 +158,7 @@ func callDeepSeek(userMessage string) (string, error) {
 
     jsonBody, _ := json.Marshal(body)
     req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
-    req.Header.Set("Authorization", "Bearer "+deepseekKey)
+    req.Header.Set("Authorization", "Bearer "+groqAPIKey)
     req.Header.Set("Content-Type", "application/json")
 
     client := &http.Client{}
@@ -207,7 +207,7 @@ func callDeepSeek(userMessage string) (string, error) {
 }
 
 func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, error) {
-    url := "https://api.deepseek.com/v1/chat/completions"
+    url := "https://api.groq.com/openai/v1/chat/completions"
 
     messages := []map[string]interface{}{
         {
@@ -226,13 +226,13 @@ func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, e
     }
 
     body := map[string]interface{}{
-        "model":    "deepseek-chat",
+        "model":    "llama3-70b-8192",
         "messages": messages,
     }
 
     jsonBody, _ := json.Marshal(body)
     req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
-    req.Header.Set("Authorization", "Bearer "+deepseekKey)
+    req.Header.Set("Authorization", "Bearer "+groqAPIKey)
     req.Header.Set("Content-Type", "application/json")
 
     client := &http.Client{}
