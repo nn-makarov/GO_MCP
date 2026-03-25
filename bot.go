@@ -49,7 +49,9 @@ func main() {
     offset := 0
     for {
         updates := getUpdates(offset)
+        log.Printf("Got %d updates", len(updates))
         for _, update := range updates {
+            log.Printf("Processing update ID: %d", update.UpdateID)
             handleUpdate(update)
             offset = update.UpdateID + 1
         }
@@ -84,12 +86,14 @@ func getUpdates(offset int) []Update {
     json.Unmarshal(body, &result)
 
     if !result.OK {
+        log.Printf("Telegram API error: %s", body)
         return nil
     }
     return result.Result
 }
 
 func handleUpdate(update Update) {
+    log.Printf("Received message: %s", update.Message.Text)
     chatID := update.Message.Chat.ID
     userText := update.Message.Text
 
