@@ -3,7 +3,6 @@ package main
 import (
     "bytes"
     "encoding/json"
-    "fmt"
     "io"
     "log"
     "net/http"
@@ -12,20 +11,14 @@ import (
 )
 
 var (
-    botToken    string
-    mcpURL      string
-    groqAPIKey  string
+    botToken   string
+    groqAPIKey string
 )
 
 func main() {
     botToken = os.Getenv("TELEGRAM_BOT_TOKEN")
     if botToken == "" {
         log.Fatal("TELEGRAM_BOT_TOKEN not set")
-    }
-
-    mcpURL = os.Getenv("MCP_URL")
-    if mcpURL == "" {
-        mcpURL = "https://go-mcp.onrender.com/call"
     }
 
     groqAPIKey = os.Getenv("GROQ_API_KEY")
@@ -45,13 +38,11 @@ func main() {
         }
     }()
 
-    log.Println("AI Bot started in polling mode")
+    log.Println("AI Bot started (Groq with llama-3.3-70b-versatile)")
     offset := 0
     for {
         updates := getUpdates(offset)
-        log.Printf("Got %d updates", len(updates))
         for _, update := range updates {
-            log.Printf("Processing update ID: %d", update.UpdateID)
             handleUpdate(update)
             offset = update.UpdateID + 1
         }
@@ -70,7 +61,7 @@ type Update struct {
 }
 
 func getUpdates(offset int) []Update {
-    url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?timeout=30&offset=%d", botToken, offset)
+    url := "https://api.telegram.org/bot" + botToken + "/getUpdates?timeout=30&offset=" + itoa(offset)
     resp, err := http.Get(url)
     if err != nil {
         log.Println("Error getting updates:", err)
@@ -93,7 +84,6 @@ func getUpdates(offset int) []Update {
 }
 
 func handleUpdate(update Update) {
-    log.Printf("Received message: %s", update.Message.Text)
     chatID := update.Message.Chat.ID
     userText := update.Message.Text
 
@@ -111,122 +101,12 @@ func callGroq(userMessage string) (string, error) {
     url := "https://api.groq.com/openai/v1/chat/completions"
 
     messages := []map[string]interface{}{
-        {
-            "role":    "system",
-            "content": "You are a friendly assistant. You can call tools: get_joke, greet. If user asks for a joke, call get_joke. If user asks to greet someone, call greet with name. Otherwise respond naturally.",
-        },
-        {
-            "role":    "user",
-            "content": userMessage,
-        },
-    }
-
-    tools := []map[string]interface{}{
-        {
-            "type": "function",
-            "function": map[string]interface{}{
-                "name":        "get_joke",
-                "description": "Get a random programming joke",
-                "parameters": map[string]interface{}{
-                    "type":       "object",
-                    "properties": map[string]interface{}{},
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": map[string]interface{}{
-                "name":        "greet",
-                "description": "Greet a person by name",
-                "parameters": map[string]interface{}{
-                    "type": "object",
-                    "properties": map[string]interface{}{
-                        "name": map[string]string{"type": "string"},
-                    },
-                    "required": []string{"name"},
-                },
-            },
-        },
+        {"role": "system", "content": "You are a friendly assistant. Answer briefly and in Russian."},
+        {"role": "user", "content": userMessage},
     }
 
     body := map[string]interface{}{
-        "model":       "llama3-70b-8192",
-        "messages":    messages,
-        "tools":       tools,
-        "tool_choice": "auto",
-    }
-
-    jsonBody, _ := json.Marshal(body)
-    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
-    req.Header.Set("Authorization", "Bearer "+groqAPIKey)
-    req.Header.Set("Content-Type", "application/json")
-
-    client := &http.Client{}
-    resp, err := client.Do(req)
-    if err != nil {
-        return "", err
-    }
-    defer resp.Body.Close()
-
-    var result map[string]interface{}
-    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-        return "", err
-    }
-
-    choices, ok := result["choices"].([]interface{})
-    if !ok || len(choices) == 0 {
-        return "Не удалось получить ответ", nil
-    }
-
-    choice := choices[0].(map[string]interface{})
-    message := choice["message"].(map[string]interface{})
-
-    // Проверяем, есть ли вызов инструмента
-    if toolCalls, ok := message["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
-        toolCall := toolCalls[0].(map[string]interface{})
-        function := toolCall["function"].(map[string]interface{})
-        toolName := function["name"].(string)
-
-        var args map[string]interface{}
-        if argsRaw, ok := function["arguments"].(string); ok {
-            json.Unmarshal([]byte(argsRaw), &args)
-        }
-
-        mcpResult, err := callMCP(toolName, args)
-        if err != nil {
-            return "", err
-        }
-
-        return finalizeWithToolResult(userMessage, toolName, mcpResult)
-    }
-
-    if content, ok := message["content"].(string); ok {
-        return content, nil
-    }
-    return "Не удалось получить ответ", nil
-}
-
-func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, error) {
-    url := "https://api.groq.com/openai/v1/chat/completions"
-
-    messages := []map[string]interface{}{
-        {
-            "role":    "system",
-            "content": "You are a friendly assistant. Answer naturally based on the tool result.",
-        },
-        {
-            "role":    "user",
-            "content": userMessage,
-        },
-        {
-            "role":      "tool",
-            "content":   toolResult,
-            "tool_call_id": "call_1",
-        },
-    }
-
-    body := map[string]interface{}{
-        "model":    "llama3-70b-8192",
+        "model":    "llama-3.3-70b-versatile",
         "messages": messages,
     }
 
@@ -245,56 +125,47 @@ func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, e
     var result map[string]interface{}
     json.NewDecoder(resp.Body).Decode(&result)
 
-    choices, _ := result["choices"].([]interface{})
-    if len(choices) == 0 {
-        return toolResult, nil
+    choices, ok := result["choices"].([]interface{})
+    if !ok || len(choices) == 0 {
+        return "Не удалось получить ответ", nil
     }
+
     choice := choices[0].(map[string]interface{})
     message := choice["message"].(map[string]interface{})
     content, _ := message["content"].(string)
+
     if content == "" {
-        return toolResult, nil
+        return "Не удалось получить ответ", nil
     }
     return content, nil
 }
 
-func callMCP(tool string, args map[string]interface{}) (string, error) {
-    reqBody := map[string]interface{}{
-        "tool": tool,
-        "args": args,
-    }
-    jsonBody, _ := json.Marshal(reqBody)
-
-    resp, err := http.Post(mcpURL, "application/json", bytes.NewBuffer(jsonBody))
-    if err != nil {
-        return "", err
-    }
-    defer resp.Body.Close()
-
-    body, _ := io.ReadAll(resp.Body)
-
-    var result map[string]interface{}
-    json.Unmarshal(body, &result)
-
-    if joke, ok := result["joke"].(string); ok {
-        return joke, nil
-    }
-    if msg, ok := result["message"].(string); ok {
-        return msg, nil
-    }
-    if errMsg, ok := result["error"].(string); ok {
-        return "", fmt.Errorf(errMsg)
-    }
-
-    return string(body), nil
-}
-
 func sendMessage(chatID int64, text string) {
-    url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
+    url := "https://api.telegram.org/bot" + botToken + "/sendMessage"
     body := map[string]interface{}{
         "chat_id": chatID,
         "text":    text,
     }
     jsonBody, _ := json.Marshal(body)
     http.Post(url, "application/json", bytes.NewBuffer(jsonBody))
+}
+
+func itoa(n int) string {
+    if n == 0 {
+        return "0"
+    }
+    var digits []byte
+    neg := false
+    if n < 0 {
+        neg = true
+        n = -n
+    }
+    for n > 0 {
+        digits = append([]byte{byte('0' + n%10)}, digits...)
+        n /= 10
+    }
+    if neg {
+        digits = append([]byte{'-'}, digits...)
+    }
+    return string(digits)
 }
