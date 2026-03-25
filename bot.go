@@ -12,8 +12,9 @@ import (
 )
 
 var (
-    botToken string
-    mcpURL   string
+    botToken     string
+    mcpURL       string
+    deepseekKey  string
 )
 
 func main() {
@@ -27,7 +28,12 @@ func main() {
         mcpURL = "https://go-mcp.onrender.com/call"
     }
 
-    log.Println("Bot started in polling mode")
+    deepseekKey = os.Getenv("DEEPSEEK_API_KEY")
+    if deepseekKey == "" {
+        log.Fatal("DEEPSEEK_API_KEY not set")
+    }
+
+    log.Println("AI Bot started in polling mode")
     offset := 0
     for {
         updates := getUpdates(offset)
@@ -73,23 +79,167 @@ func getUpdates(offset int) []Update {
 
 func handleUpdate(update Update) {
     chatID := update.Message.Chat.ID
-    text := update.Message.Text
+    userText := update.Message.Text
 
-    var response string
-    switch text {
-    case "/start":
-        response = "Привет! Я бот-шутник 🤖\n\nНапиши /joke или просто 'шутку', чтобы получить шутку о программировании!"
-    case "/joke", "шутка", "дай шутку", "joke":
-        joke, err := callMCP("joke", nil)
-        if err != nil {
-            response = "Ошибка: " + err.Error()
-        } else {
-            response = joke
-        }
-    default:
-        response = "Не понял команду 🤔\n\nДоступные команды:\n/joke - получить шутку\n/start - приветствие"
+    // Отправляем запрос в DeepSeek
+    response, err := callDeepSeek(userText)
+    if err != nil {
+        log.Println("DeepSeek error:", err)
+        sendMessage(chatID, "Извините, произошла ошибка. Попробуйте позже.")
+        return
     }
+
     sendMessage(chatID, response)
+}
+
+func callDeepSeek(userMessage string) (string, error) {
+    url := "https://api.deepseek.com/v1/chat/completions"
+
+    // Описание инструментов, которые есть в MCP
+    tools := []map[string]interface{}{
+        {
+            "type": "function",
+            "function": map[string]interface{}{
+                "name":        "get_joke",
+                "description": "Get a random programming joke",
+                "parameters": map[string]interface{}{
+                    "type":       "object",
+                    "properties": map[string]interface{}{},
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": map[string]interface{}{
+                "name":        "greet",
+                "description": "Greet a person by name",
+                "parameters": map[string]interface{}{
+                    "type": "object",
+                    "properties": map[string]interface{}{
+                        "name": map[string]string{"type": "string"},
+                    },
+                    "required": []string{"name"},
+                },
+            },
+        },
+    }
+
+    messages := []map[string]interface{}{
+        {
+            "role":    "system",
+            "content": "You are a friendly assistant. You can call tools: get_joke, greet. If user asks for a joke, call get_joke. If user asks to greet someone, call greet with name. Otherwise respond naturally.",
+        },
+        {
+            "role":    "user",
+            "content": userMessage,
+        },
+    }
+
+    body := map[string]interface{}{
+        "model":       "deepseek-chat",
+        "messages":    messages,
+        "tools":       tools,
+        "tool_choice": "auto",
+    }
+
+    jsonBody, _ := json.Marshal(body)
+    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+    req.Header.Set("Authorization", "Bearer "+deepseekKey)
+    req.Header.Set("Content-Type", "application/json")
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return "", err
+    }
+    defer resp.Body.Close()
+
+    var result map[string]interface{}
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return "", err
+    }
+
+    // Извлекаем ответ
+    choices, ok := result["choices"].([]interface{})
+    if !ok || len(choices) == 0 {
+        return "Не удалось получить ответ", nil
+    }
+
+    choice := choices[0].(map[string]interface{})
+    message := choice["message"].(map[string]interface{})
+
+    // Проверяем, есть ли вызов инструмента
+    if toolCalls, ok := message["tool_calls"].([]interface{}); ok && len(toolCalls) > 0 {
+        toolCall := toolCalls[0].(map[string]interface{})
+        function := toolCall["function"].(map[string]interface{})
+        toolName := function["name"].(string)
+
+        // Парсим аргументы
+        var args map[string]interface{}
+        if argsRaw, ok := function["arguments"].(string); ok {
+            json.Unmarshal([]byte(argsRaw), &args)
+        }
+
+        // Вызываем MCP
+        mcpResult, err := callMCP(toolName, args)
+        if err != nil {
+            return "", err
+        }
+
+        // Отправляем результат обратно в DeepSeek для финального ответа
+        return finalizeWithToolResult(userMessage, toolName, mcpResult)
+    }
+
+    // Если нет вызова инструмента, просто возвращаем ответ
+    return message["content"].(string), nil
+}
+
+func finalizeWithToolResult(userMessage, toolName, toolResult string) (string, error) {
+    url := "https://api.deepseek.com/v1/chat/completions"
+
+    messages := []map[string]interface{}{
+        {
+            "role":    "system",
+            "content": "You are a friendly assistant. Answer naturally based on the tool result.",
+        },
+        {
+            "role":    "user",
+            "content": userMessage,
+        },
+        {
+            "role":    "tool",
+            "content": toolResult,
+            "tool_call_id": "call_1",
+        },
+    }
+
+    body := map[string]interface{}{
+        "model":    "deepseek-chat",
+        "messages": messages,
+    }
+
+    jsonBody, _ := json.Marshal(body)
+    req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+    req.Header.Set("Authorization", "Bearer "+deepseekKey)
+    req.Header.Set("Content-Type", "application/json")
+
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        return "", err
+    }
+    defer resp.Body.Close()
+
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+
+    choices, _ := result["choices"].([]interface{})
+    if len(choices) == 0 {
+        return toolResult, nil
+    }
+    choice := choices[0].(map[string]interface{})
+    message := choice["message"].(map[string]interface{})
+    return message["content"].(string), nil
 }
 
 func callMCP(tool string, args map[string]interface{}) (string, error) {
@@ -106,6 +256,7 @@ func callMCP(tool string, args map[string]interface{}) (string, error) {
     defer resp.Body.Close()
 
     body, _ := io.ReadAll(resp.Body)
+
     var result map[string]interface{}
     json.Unmarshal(body, &result)
 
@@ -118,6 +269,7 @@ func callMCP(tool string, args map[string]interface{}) (string, error) {
     if errMsg, ok := result["error"].(string); ok {
         return "", fmt.Errorf(errMsg)
     }
+
     return string(body), nil
 }
 
