@@ -21,7 +21,6 @@ var jokes = []string{
 func main() {
     rand.Seed(time.Now().UnixNano())
 
-    // Список инструментов
     http.HandleFunc("/tools", func(w http.ResponseWriter, r *http.Request) {
         tools := []map[string]string{
             {"name": "joke", "description": "Get a random programming joke"},
@@ -31,7 +30,6 @@ func main() {
         json.NewEncoder(w).Encode(tools)
     })
 
-    // Вызов инструментов
     http.HandleFunc("/call", func(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
             http.Error(w, "Use POST", http.StatusMethodNotAllowed)
@@ -54,14 +52,12 @@ func main() {
         case "joke":
             randomJoke := jokes[rand.Intn(len(jokes))]
             result = map[string]string{"joke": randomJoke}
-
         case "greet":
             name, ok := request.Args["name"].(string)
             if !ok {
                 name = "Bro"
             }
             result = map[string]string{"message": fmt.Sprintf("Hello, %s! Want a joke? Call /call with tool=joke", name)}
-
         default:
             result = map[string]string{"error": "Unknown tool"}
         }
