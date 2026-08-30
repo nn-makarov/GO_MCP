@@ -93,6 +93,15 @@ func tools() []Tool {
 				"id": num("ID товара в PriceTracker"),
 			}, "id"),
 		},
+		{
+			Name: "update_price",
+			Description: "Обновить текущую цену отслеживаемого товара по его ID. Новое значение " +
+				"добавляется в историю цен. Вызывай, когда пользователь сообщает, что цена товара изменилась.",
+			Parameters: obj(map[string]interface{}{
+				"id":    num("ID товара в PriceTracker"),
+				"price": num("Новая цена в рублях"),
+			}, "id", "price"),
+		},
 	}
 }
 
@@ -150,6 +159,11 @@ func dispatch(tool string, args map[string]interface{}) string {
 	case "product_stats":
 		id, _ := args["id"].(float64)
 		return productStats(int(id))
+
+	case "update_price":
+		id, _ := args["id"].(float64)
+		price, _ := args["price"].(float64)
+		return updatePrice(int(id), price)
 
 	default:
 		return "Неизвестный инструмент: " + tool
@@ -225,4 +239,29 @@ func productStats(id int) string {
 	}
 	return fmt.Sprintf("«%s»: текущая цена %.0f ₽, записей в истории: %d, изменение цены: %+.0f ₽.",
 		stats.Product.Title, stats.Product.CurrentPrice, stats.Stats.TotalRecords, stats.Stats.PriceChange)
+}
+
+func updatePrice(id int, price float64) string {
+	body, _ := json.Marshal(map[string]interface{}{"price": price})
+	req, _ := http.NewRequest("PATCH", fmt.Sprintf("%s/api/products/%d/price", priceTrackerURL, id), bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "PriceTracker недоступен: " + err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Sprintf("Товар с ID %d не найден.", id)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "Не удалось обновить цену (код " + fmt.Sprint(resp.StatusCode) + ")"
+	}
+
+	var product struct {
+		Title string `json:"title"`
+	}
+	data, _ := io.ReadAll(resp.Body)
+	json.Unmarshal(data, &product)
+	return fmt.Sprintf("Цена товара «%s» обновлена на %.0f ₽.", product.Title, price)
 }
