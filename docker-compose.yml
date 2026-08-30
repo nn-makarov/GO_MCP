@@ -2,6 +2,11 @@ services:
   mcp-server:
     build: .
     command: ./mcp-server
+    environment:
+      # Адрес сервиса PriceTracker. По умолчанию — имя его контейнера в общей
+      # docker-сети. Если PriceTracker в другом compose, подключите их одной
+      # внешней сетью или укажите здесь его адрес.
+      PRICETRACKER_URL: ${PRICETRACKER_URL:-http://pricetracker-app-1:8001}
     restart: unless-stopped
 
   bot:

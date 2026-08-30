@@ -215,7 +215,7 @@ func toolsForGroq(tools []mcpTool) []map[string]interface{} {
 
 func groqRequest(messages []groqMessage, tools []map[string]interface{}) (*groqResponse, error) {
 	payload := map[string]interface{}{
-		"model":    "llama-3.3-70b-versatile",
+		"model":    "openai/gpt-oss-120b",
 		"messages": messages,
 	}
 	if len(tools) > 0 {
