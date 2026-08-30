@@ -1,0 +1,15 @@
+services:
+  mcp-server:
+    build: .
+    command: ./mcp-server
+    restart: unless-stopped
+
+  bot:
+    build: .
+    command: ./bot
+    env_file: .env
+    environment:
+      MCP_URL: http://mcp-server:8081
+    depends_on:
+      - mcp-server
+    restart: unless-stopped
